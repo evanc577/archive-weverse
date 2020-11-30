@@ -1,4 +1,3 @@
-use crate::config::Config;
 use chrono::DateTime;
 use futures::stream::{self, StreamExt};
 use reqwest::header;
@@ -8,82 +7,12 @@ use std::convert::TryFrom;
 use std::fs::{self, File};
 use std::io::prelude::*;
 
-const INFO_URL: &str = "https://weversewebapi.weverse.io/wapi/v1/communities/info";
-const ARTIST_TAB: &str =
-    "https://weversewebapi.weverse.io/wapi/v1/communities/{artist_id}/posts/artistTab";
-const MEDIA_TAB: &str =
-    "https://weversewebapi.weverse.io/wapi/v1/stream/community/{artist_id}/mediaTab";
-const TO_FANS: &str =
-    "https://weversewebapi.weverse.io/wapi/v1/stream/community/{artist_id}/toFans";
-const POST_URL: &str =
-    "https://weversewebapi.weverse.io/wapi/v1/communities/{artist_id}/posts/{post_id}";
-const VIDEO_DASH_URL: &str = "https://cdn-media.weverse.io/video{video_id}/DASH.mpd";
+use crate::config::Config;
+use crate::network::network_structs::*;
+use crate::network::urls::*;
 
-pub struct Network<'a> {
-    config: &'a Config,
-    client: reqwest::Client,
-    anon_client: reqwest::Client,
-    artist_id_map: HashMap<String, i64>,
-}
-#[derive(Debug, Deserialize)]
-struct Posts {
-    posts: Vec<Post>,
-    #[serde(rename = "isEnded")]
-    is_ended: bool,
-    #[serde(rename = "lastId")]
-    last_id: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Post {
-    id: i64,
-    #[serde(rename = "communityUser")]
-    community_user: CommunityUser,
-    community: Community,
-    #[serde(rename = "communityTabId")]
-    community_tab_id: i64,
-    #[serde(rename = "type")]
-    post_type: String,
-    body: Option<String>,
-    #[serde(rename = "createdAt")]
-    created_at: String,
-    #[serde(rename = "updatedAt")]
-    updated_at: String,
-    photos: Option<Vec<Photo>>,
-    #[serde(rename = "attachedVideos")]
-    attached_videos: Option<Vec<Video>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CommunityUser {
-    id: i64,
-    #[serde(rename = "profileNickname")]
-    nickname: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Community {
-    id: i64,
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Photo {
-    id: i64,
-    #[serde(rename = "orgImgUrl")]
-    url: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Video {
-    #[serde(rename = "videoUrl")]
-    video_url: Option<String>,
-}
-
-enum PostType {
-    Artist,
-    Moment,
-}
+mod network_structs;
+mod urls;
 
 pub async fn download(conf: &Config, token: &String) -> Result<(), String> {
     let n = Network::new(&conf, &token).await?;
@@ -110,9 +39,7 @@ pub async fn download(conf: &Config, token: &String) -> Result<(), String> {
     println!("posts: {:#?}", &posts);
 
     // download the posts
-    let posts_iter = posts
-        .iter()
-        .map(|p| n.download_post(&p));
+    let posts_iter = posts.iter().map(|p| n.download_post(&p));
     let test = stream::iter(posts_iter)
         .buffer_unordered(conf.max_connections)
         .collect::<Vec<Result<_, _>>>()
@@ -306,7 +233,7 @@ impl Network<'_> {
 
         // download photos
         if let Some(photos) = &post.photos {
-            for (i,photo) in photos.iter().enumerate() {
+            for (i, photo) in photos.iter().enumerate() {
                 let ext = match photo.url.rfind('.') {
                     Some(ext_idx) => &photo.url[ext_idx..],
                     None => "",
@@ -339,6 +266,8 @@ impl Network<'_> {
             .map_err(|e| format!("Error parsing into bytes for {}: {}", url, e))?;
         let mut buffer = File::create(save_path)
             .map_err(|e| format!("Error creating file {}: {}", save_path, e))?;
-        buffer.write_all(&data).map_err(|e| format!("Error writing to file {}: {}", save_path, e))
+        buffer
+            .write_all(&data)
+            .map_err(|e| format!("Error writing to file {}: {}", save_path, e))
     }
 }
