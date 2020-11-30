@@ -9,7 +9,7 @@ pub struct Config {
     #[serde(default = "default_keep_open")]
     pub keep_open: bool,
     #[serde(default = "default_num_processes")]
-    pub num_processes: usize,
+    pub max_connections: usize,
     pub artists: HashMap<String, ArtistConfig>,
 }
 
@@ -18,9 +18,9 @@ pub struct ArtistConfig {
     pub artist_download_path: Option<String>,
     pub moments_download_path: Option<String>,
     pub videos_download_path: Option<String>,
-    pub recent_artist: Option<usize>,
-    pub recent_moments: Option<usize>,
-    pub recent_videos: Option<usize>,
+    pub recent_artist: Option<isize>,
+    pub recent_moments: Option<isize>,
+    pub recent_videos: Option<isize>,
 }
 
 fn default_keep_open() -> bool {
@@ -35,7 +35,7 @@ pub fn read_config() -> Result<Config, String> {
         .map_err(|e| format!("Error reading config.toml: {}", e))?;
     let conf: Config =
         toml::from_str(&conf_contents).map_err(|e| format!("Error parsing config.yml: {}", e))?;
-    println!("config: {:#?}", conf);
+    // println!("config: {:#?}", conf);
     Ok(conf)
 }
 
@@ -57,6 +57,6 @@ pub fn read_token(cookies_file: &String) -> Result<String, String> {
         .as_str()
         .to_owned();
 
-    println!("token: {:?}", token);
+    // println!("token: {:?}", token);
     Ok(token)
 }

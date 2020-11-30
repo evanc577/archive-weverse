@@ -2,8 +2,6 @@
 extern crate lazy_static;
 
 use std::process;
-use crate::config::Config;
-use crate::network::Network;
 
 mod config;
 mod network;
@@ -22,12 +20,5 @@ async fn main() {
 async fn run() -> Result<(), String> {
     let conf = config::read_config()?;
     let token = config::read_token(&conf.cookies_file)?;
-    download(&conf, &token).await
-}
-
-
-async fn download(conf: &Config, token: &String) -> Result<(), String> {
-    let n = Network::new(&conf, &token)?;
-
-    Ok(())
+    network::download(&conf, &token).await
 }
