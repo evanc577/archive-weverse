@@ -68,3 +68,17 @@ pub enum PostType {
     Artist,
     Moment,
 }
+
+pub enum DownloadOkResult {
+    Downloaded(String),
+    Skipped(String),
+}
+
+impl std::fmt::Display for DownloadOkResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DownloadOkResult::Downloaded(v) => v.fmt(f),
+            DownloadOkResult::Skipped(v) => v.fmt(f),
+        }
+    }
+}

@@ -6,13 +6,43 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
-chrono = "0.4"
-futures = "0.3"
-lazy_static = "1.4"
-regex = "1"
-reqwest = "0.10"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "0.2", features = ["full"] }
-toml = "0.5"
+[dependencies.chrono]
+version = "0.4"
+default-features = false
+features = ["std"]
+
+[dependencies.futures]
+version = "0.3"
+default-features = false
+
+[dependencies.lazy_static]
+version = "1.4"
+default-features = false
+
+[dependencies.regex]
+version = "1"
+default-features = false
+features = ["std"]
+
+[dependencies.reqwest]
+version = "0.10"
+default-features = false
+features = ["rustls-tls"]
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0"
+default-features = false
+
+[dependencies.tokio]
+version = "0.2"
+default-features = false
+features = ["macros"]
+
+[dependencies.toml]
+version = "0.5"
+default-features = false

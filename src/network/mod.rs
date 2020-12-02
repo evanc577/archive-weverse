@@ -18,6 +18,7 @@ pub async fn download(conf: &Config, token: &String) -> Result<(), String> {
     let n = Network::new(&conf, &token).await?;
 
     // get a list of all posts to download
+    println!("Getting all post info...");
     let artist_iter = conf
         .artists
         .iter()
@@ -35,15 +36,23 @@ pub async fn download(conf: &Config, token: &String) -> Result<(), String> {
         .map_err(|e| format!("Error collecting posts info: {}", e))?
         .into_iter()
         .flatten()
-        .collect::<Vec<Post>>();
-    println!("posts: {:#?}", &posts);
+        .collect::<Vec<_>>();
 
     // download the posts
+    println!("Downloading all posts...");
     let posts_iter = posts.iter().map(|p| n.download_post(&p));
-    let test = stream::iter(posts_iter)
-        .buffer_unordered(conf.max_connections)
-        .collect::<Vec<Result<_, _>>>()
-        .await;
+    let mut downloads = stream::iter(posts_iter).buffer_unordered(conf.max_connections);
+
+    while let Some(result) = downloads.next().await {
+        match result {
+            Ok(v) => {
+                if let DownloadOkResult::Downloaded(_) = v {
+                    println!("{}", v);
+                }
+            }
+            Err(msg) => return Err(msg),
+        }
+    }
 
     Ok(())
 }
@@ -60,7 +69,6 @@ async fn get_artist_id(client: &reqwest::Client) -> Result<HashMap<String, i64>,
     }
 
     let url = INFO_URL;
-    println!("Sending request to: {}", &url);
     let resp = client
         .get(url)
         .send()
@@ -99,7 +107,8 @@ impl Network<'_> {
         let anon_client = reqwest::Client::builder()
             .build()
             .map_err(|e| format!("Error building request client: {}", e))?;
-        let artist_id_map = get_artist_id(&client).await?;
+        println!("Getting artist ids...");
+        let artist_id_map = get_artist_id(&anon_client).await?;
 
         let n = Network {
             config: config,
@@ -136,13 +145,17 @@ impl Network<'_> {
         loop {
             // build request
             let page_size: String = match recent {
-                Some(v) => std::cmp::max(1, v - count).to_string(),
+                Some(v) => {
+                    if v <= &0 {
+                        break;
+                    }
+                    std::cmp::max(1, v - count).to_string()
+                }
                 None => String::from("100"),
             };
             let params = [("pageSize", &page_size), ("from", &from)];
 
             // send request
-            println!("Sending request to: {}", &url);
             let resp = self
                 .client
                 .get(&url)
@@ -171,10 +184,10 @@ impl Network<'_> {
             }
             match recent {
                 Some(v) => {
-                    if v - num_posts <= 0 {
+                    count += num_posts;
+                    if v - count <= 0 {
                         break;
                     }
-                    count += num_posts;
                 }
                 None => (),
             }
@@ -186,7 +199,7 @@ impl Network<'_> {
         Ok(ret)
     }
 
-    async fn download_post(&self, post: &Post) -> Result<String, String> {
+    async fn download_post(&self, post: &Post) -> Result<DownloadOkResult, String> {
         let date = DateTime::parse_from_rfc3339(&post.created_at)
             .unwrap()
             .format("%Y%m%d");
@@ -211,7 +224,7 @@ impl Network<'_> {
 
         // don't download if directory exists
         if fs::metadata(dir.as_str()).is_ok() {
-            return Ok(String::from(format!("{} exists, skipping", dir.as_str())));
+            return Ok(DownloadOkResult::Skipped(format!("Skipping {}", dir.as_str())));
         }
 
         // recreate temp directory
@@ -244,14 +257,70 @@ impl Network<'_> {
         }
 
         // download videos
+        if let Some(_) = &post.attached_videos {
+            let url = POST_URL
+                .replace("{artist_id}", post.community.id.to_string().as_str())
+                .replace("{post_id}", post.id.to_string().as_str());
+            if let Some(videos) = self.download_post_video_info(url.as_str()).await? {
+                for (i, video) in videos.iter().enumerate() {
+                    if let Some(video_url) = &video.video_url {
+                        let ext = match video_url.rfind('.') {
+                            Some(ext_idx) => &video_url[ext_idx..],
+                            None => "",
+                        };
+                        let save_path = format!("{}/{}-vid{:02}{}", temp_dir, prefix, i, ext);
+                        self.download_direct(&video_url, &save_path).await?;
+                    }
+                }
+            }
+        }
 
         // write contents
+        {
+            let save_path = format!("{}/{}-content.txt", temp_dir, prefix);
+            let body = match &post.body {
+                Some(v) => v.as_str(),
+                None => "",
+            };
+            let content = format!(
+                "https://weverse.io/{}/artist/{}\n{} ({}):\n{}",
+                post.community.name.to_lowercase(),
+                post.id.to_string(),
+                &post.community_user.nickname,
+                &post.created_at,
+                body
+            );
+            let mut buffer = File::create(save_path.as_str())
+                .map_err(|e| format!("Error creating file {}: {}", save_path.as_str(), e))?;
+            buffer
+                .write_all(&content.as_bytes())
+                .map_err(|e| format!("Error writing to file {}: {}", save_path.as_str(), e))?;
+        }
 
         // rename temp directory
         let _ = fs::rename(&temp_dir, &dir)
             .map_err(|e| format!("Error renaming {}: {}", temp_dir, e))?;
 
-        Ok(String::from("OK"))
+        Ok(DownloadOkResult::Downloaded(format!("Downloaded {}", prefix)))
+    }
+
+    async fn download_post_video_info(&self, url: &str) -> Result<Option<Vec<Video>>, String> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Error sending request for {}: {}", &url, e))?;
+
+        // parse response
+        let text = &resp
+            .text()
+            .await
+            .map_err(|e| format!("Error reading response text for {}: {}", &url, e))?;
+        let post_resp: Post = serde_json::from_str(text)
+            .map_err(|e| format!("Error parsing json for {}: {}", &url, e))?;
+
+        Ok(post_resp.attached_videos)
     }
 
     async fn download_direct(&self, url: &str, save_path: &str) -> Result<(), String> {
