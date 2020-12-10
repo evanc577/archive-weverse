@@ -14,7 +14,7 @@ use crate::network::urls::*;
 mod network_structs;
 mod urls;
 
-pub async fn download(conf: &Config, token: &String) -> Result<(), String> {
+pub async fn download(conf: &Config, token: &str) -> Result<(), String> {
     let n = Network::new(&conf, &token).await?;
 
     // get a list of all posts to download
@@ -91,8 +91,8 @@ async fn get_artist_id(client: &reqwest::Client) -> Result<HashMap<String, i64>,
     Ok(artist_id_map)
 }
 
-impl Network<'_> {
-    async fn new<'a>(config: &'a Config, token: &str) -> Result<Network<'a>, String> {
+impl<'a> Network<'a> {
+    async fn new(config: &'a Config, token: &str) -> Result<Network<'a>, String> {
         // create client with appropriate authorization header
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -111,10 +111,10 @@ impl Network<'_> {
         let artist_id_map = get_artist_id(&anon_client).await?;
 
         let n = Network {
-            config: config,
-            client: client,
-            anon_client: anon_client,
-            artist_id_map: artist_id_map,
+            config,
+            client,
+            anon_client,
+            artist_id_map,
         };
         Ok(n)
     }
@@ -217,25 +217,26 @@ impl Network<'_> {
                 "to_fans" => artist_config.moments_download_path.clone(),
                 _ => return Err(String::from("Could not parse post_type")),
             }
-            .unwrap_or(String::from("posts")),
+            .unwrap_or_else(|| String::from("posts")),
             prefix
         );
         let temp_dir = format!("{}.temp", dir);
 
         // don't download if directory exists
         if fs::metadata(dir.as_str()).is_ok() {
-            return Ok(DownloadOkResult::Skipped(format!("Skipping {}", dir.as_str())));
+            return Ok(DownloadOkResult::Skipped(format!(
+                "Skipping {}",
+                dir.as_str()
+            )));
         }
 
         // recreate temp directory
-        match fs::remove_dir_all(&temp_dir) {
-            Ok(_) => println!("Removed {}", temp_dir),
-            Err(_) => (),
-        };
-        match fs::remove_file(&temp_dir) {
-            Ok(_) => println!("Removed {}", temp_dir),
-            Err(_) => (),
-        };
+        if fs::remove_dir_all(&temp_dir).is_ok() {
+            println!("Removed {}", temp_dir);
+        }
+        if fs::remove_file(&temp_dir).is_ok() {
+            println!("Removed {}", temp_dir);
+        }
         let _ = fs::create_dir_all(temp_dir.as_str()).map_err(|e| {
             format!(
                 "Error could not create directory {}: {}",
@@ -257,7 +258,7 @@ impl Network<'_> {
         }
 
         // download videos
-        if let Some(_) = &post.attached_videos {
+        if post.attached_videos.is_some() {
             let url = POST_URL
                 .replace("{artist_id}", post.community.id.to_string().as_str())
                 .replace("{post_id}", post.id.to_string().as_str());
@@ -301,7 +302,10 @@ impl Network<'_> {
         let _ = fs::rename(&temp_dir, &dir)
             .map_err(|e| format!("Error renaming {}: {}", temp_dir, e))?;
 
-        Ok(DownloadOkResult::Downloaded(format!("Downloaded {}", prefix)))
+        Ok(DownloadOkResult::Downloaded(format!(
+            "Downloaded {}",
+            prefix
+        )))
     }
 
     async fn download_post_video_info(&self, url: &str) -> Result<Option<Vec<Video>>, String> {

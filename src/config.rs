@@ -39,7 +39,7 @@ pub fn read_config() -> Result<Config, String> {
     Ok(conf)
 }
 
-pub fn read_token(cookies_file: &String) -> Result<String, String> {
+pub fn read_token(cookies_file: &str) -> Result<String, String> {
     lazy_static! {
         static ref RE: Regex = Regex::new(
             r"(?m)^(?P<domain>\.weverse\.io)\t.+?\t.+?\t.+?\t.+?\t(?P<name>we_access_token)\t(?P<value>.+?)$"
