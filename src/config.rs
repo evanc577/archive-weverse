@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub cookies_file: String,
     #[serde(default = "default_keep_open")]
@@ -13,7 +13,7 @@ pub struct Config {
     pub artists: HashMap<String, ArtistConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ArtistConfig {
     pub artist_download_path: Option<String>,
     pub moments_download_path: Option<String>,

@@ -2,8 +2,9 @@ use crate::config::Config;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-pub struct Network<'a> {
-    pub config: &'a Config,
+#[derive(Clone)]
+pub struct Network {
+    pub config: Config,
     pub client: reqwest::Client,
     pub anon_client: reqwest::Client,
     pub artist_id_map: HashMap<String, i64>,
@@ -18,7 +19,7 @@ pub struct Posts {
     pub last_id: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Post {
     pub id: i64,
     #[serde(rename = "communityUser")]
@@ -36,29 +37,31 @@ pub struct Post {
     pub photos: Option<Vec<Photo>>,
     #[serde(rename = "attachedVideos")]
     pub attached_videos: Option<Vec<Video>>,
+    #[serde(rename = "isLocked")]
+    pub locked: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct CommunityUser {
     pub id: i64,
     #[serde(rename = "profileNickname")]
     pub nickname: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Community {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Photo {
     pub id: i64,
     #[serde(rename = "orgImgUrl")]
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Video {
     #[serde(rename = "videoUrl")]
     pub video_url: Option<String>,
@@ -69,16 +72,9 @@ pub enum PostType {
     Moment,
 }
 
-pub enum DownloadOkResult {
-    Downloaded(String),
-    Skipped(String),
-}
-
-impl std::fmt::Display for DownloadOkResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            DownloadOkResult::Downloaded(v) => v.fmt(f),
-            DownloadOkResult::Skipped(v) => v.fmt(f),
-        }
-    }
+#[derive(Debug)]
+pub enum DownloadResult {
+    Downloaded(Post),
+    Skipped(Post),
+    RequiresPassword(Post),
 }
