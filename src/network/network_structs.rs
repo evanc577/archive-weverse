@@ -73,8 +73,7 @@ pub enum PostType {
 }
 
 #[derive(Debug)]
-pub enum DownloadResult {
+pub enum DownloadOk {
     Downloaded(Post),
     Skipped(Post),
-    RequiresPassword(Post),
 }
