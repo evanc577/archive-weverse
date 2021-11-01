@@ -1,6 +1,8 @@
 use crate::config::Config;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 
 #[derive(Clone)]
 pub struct Network {
@@ -76,4 +78,65 @@ pub enum PostType {
 pub enum DownloadOk {
     Downloaded(Post),
     Skipped(Post),
+}
+
+#[derive(Debug)]
+pub enum DownloadErr {
+    ArtistMapErr(String),
+    LastIdErr,
+    ParsePostTypeErr(String),
+    RequestErr(String, reqwest::Error),
+    ResponseErr(String, Post, reqwest::StatusCode),
+    ResponseBytesErr(String, reqwest::Error),
+    ResponseJsonErr(String, serde_json::Error),
+    ResponseTextErr(String, reqwest::Error),
+    StdinErr,
+    StdinErrStr(std::io::Error),
+    FileCreateErr(String, std::io::Error),
+    FileWriteErr(String, std::io::Error),
+    RenameErr(String, std::io::Error),
+}
+
+impl Error for DownloadErr {}
+
+impl fmt::Display for DownloadErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DownloadErr::ArtistMapErr(s) => {
+                format!("Error finding {} in artist_id_map", s).fmt(f)
+            },
+            DownloadErr::RequestErr(s, e) => {
+                format!("Error sending request for {}: {}", s, e).fmt(f)
+            },
+            DownloadErr::ResponseTextErr(s, e) => {
+                format!("Error reading response text for {}: {}", s, e).fmt(f)
+            },
+            DownloadErr::ResponseJsonErr(s, e) => {
+                format!("Error parsing json for {}: {}", s, e).fmt(f)
+            },
+            DownloadErr::LastIdErr => write!(f, "Error lastId not found"),
+            DownloadErr::ParsePostTypeErr(s) => {
+                format!("Error parsing post type: {}", s).fmt(f)
+            },
+            DownloadErr::StdinErr => write!(f, "Error reading stdin"),
+            DownloadErr::StdinErrStr(s) => {
+                format!("Error reading stdin: {}", s).fmt(f)
+            },
+            DownloadErr::ResponseErr(s, _, c) => {
+                format!("Error response for {}: {}", s, c).fmt(f)
+            },
+            DownloadErr::ResponseBytesErr(s, e) => {
+                format!("Error parsing bytes for {}: {}", s, e).fmt(f)
+            },
+            DownloadErr::FileCreateErr(s, e) => {
+                format!("Error creating file {}: {}", s, e).fmt(f)
+            },
+            DownloadErr::FileWriteErr(s, e) => {
+                format!("Error writing to file {}: {}", s, e).fmt(f)
+            },
+            DownloadErr::RenameErr(s, e) => {
+                format!("Error renaming {}: {}", s, e).fmt(f)
+            },
+        }
+    }
 }

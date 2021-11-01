@@ -1,6 +1,3 @@
-// #[macro_use]
-// extern crate lazy_static;
-
 use chrono::DateTime;
 use futures::stream::{self, StreamExt};
 use reqwest::header;
@@ -9,6 +6,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fs::{self, File};
 use std::io::prelude::*;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::io;
 
@@ -25,7 +23,34 @@ fn get_prefix(post: &Post) -> String {
         .format("%Y%m%d");
     let id = post.id.to_string();
     let user = &post.community_user.nickname;
-    format!("{}-{}-{}", date, id, user)
+    sanitize_filename::sanitize(format!("{}-{}-{}", date, id, user))
+}
+
+fn post_dir_exists(dir: impl AsRef<Path>, prefix: &str) -> bool {
+    let start = prefix.splitn(3, "-").take(2).collect::<Vec<_>>().join("-");
+    let paths = match fs::read_dir(dir) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    for cur_path in paths {
+        let cur_path = match cur_path {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let cur_start = cur_path
+            .file_name()
+            .to_string_lossy()
+            .splitn(3, "-")
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("-");
+        if cur_start == start {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn get_url(post: &Post) -> String {
@@ -69,7 +94,16 @@ pub async fn download(conf: &Config, token: &str) -> Result<(), String> {
     {
         let mtx = mtx.clone();
         tokio::spawn(async move {
-            print_worker(rx, mtx).await;
+            loop {
+                match rx.recv() {
+                    Ok(s) => {
+                        let guard = mtx.lock().unwrap();
+                        println!("{}", s);
+                        std::mem::drop(guard);
+                    }
+                    Err(_) => return,
+                }
+            }
         });
     }
 
@@ -78,25 +112,19 @@ pub async fn download(conf: &Config, token: &str) -> Result<(), String> {
             Ok(DownloadOk::Downloaded(p)) => {
                 tx.send(format!("Downloaded {}", get_url(&p))).unwrap()
             }
-            Err(s) => tx.send(s).unwrap(),
+            Err(e) => {
+                if let DownloadErr::ResponseErr(_, post, code) = e {
+                    if code == reqwest::StatusCode::FORBIDDEN {
+                        tx.send(format!("Wrong password for {}", get_url(&post)))
+                            .unwrap();
+                    }
+                }
+            }
             _ => (),
         }
     }
 
     Ok(())
-}
-
-async fn print_worker(rx: std::sync::mpsc::Receiver<String>, mtx: Arc<Mutex<usize>>) {
-    loop {
-        match rx.recv() {
-            Ok(s) => {
-                let guard = mtx.lock().unwrap();
-                println!("{}", s);
-                std::mem::drop(guard);
-            }
-            Err(_) => return,
-        }
-    }
 }
 
 async fn get_artist_id(client: &reqwest::Client) -> Result<HashMap<String, i64>, String> {
@@ -166,11 +194,11 @@ impl<'a> Network {
         recent: &Option<isize>,
         artist: String,
         post_type: PostType,
-    ) -> Result<Vec<Post>, String> {
+    ) -> Result<Vec<Post>, DownloadErr> {
         let artist_id = self
             .artist_id_map
             .get(&artist[..])
-            .ok_or(format!("Error could not find {} in artist_id_map", &artist))?;
+            .ok_or(DownloadErr::ArtistMapErr(artist))?;
 
         // set up loop variables
         let mut from = String::from("");
@@ -204,18 +232,17 @@ impl<'a> Network {
                 .query(&params)
                 .send()
                 .await
-                .map_err(|e| format!("Error sending request for {}: {}", &url, e))?;
+                .map_err(|e| DownloadErr::RequestErr(url.clone(), e))?;
 
             // parse response
             let text = &resp
                 .text()
                 .await
-                .map_err(|e| format!("Error reading response text for {}: {}", &url, e))?;
+                .map_err(|e| DownloadErr::ResponseTextErr(url.clone(), e))?;
             let posts_resp: Posts = serde_json::from_str(text)
-                .map_err(|e| format!("Error parsing json for {}: {}", &url, e))?;
+                .map_err(|e| DownloadErr::ResponseJsonErr(url.clone(), e))?;
             let posts = &posts_resp.posts;
-            let num_posts = isize::try_from(posts.len())
-                .map_err(|e| format!("Error could not convert num posts to isize: {}", e))?;
+            let num_posts = isize::try_from(posts.len()).unwrap();
 
             // add to return vector
             ret.extend(posts_resp.posts);
@@ -235,7 +262,7 @@ impl<'a> Network {
             }
             from = posts_resp
                 .last_id
-                .ok_or("Error lastId not found")?
+                .ok_or(DownloadErr::LastIdErr)?
                 .to_string();
         }
         Ok(ret)
@@ -245,34 +272,31 @@ impl<'a> Network {
         &self,
         mut post: Post,
         mtx: Arc<Mutex<usize>>,
-    ) -> Result<DownloadOk, String> {
+    ) -> Result<DownloadOk, DownloadErr> {
         let prefix = get_prefix(&post);
 
         // create download directory
         let artist = post.community.name.to_lowercase();
         let artist_config = &self.config.artists.get(&artist).unwrap();
-        let dir = format!(
-            "{}/{}",
-            match post.post_type.to_lowercase().as_str() {
-                "normal" => artist_config.artist_download_path.clone(),
-                "to_fans" => artist_config.moments_download_path.clone(),
-                _ => return Err(String::from("Could not parse post_type")),
-            }
-            .unwrap_or_else(|| String::from("posts")),
-            prefix
-        );
+        let download_dir = match post.post_type.to_lowercase().as_str() {
+            "normal" => artist_config.artist_download_path.clone(),
+            "to_fans" => artist_config.moments_download_path.clone(),
+            _ => return Err(DownloadErr::ParsePostTypeErr(post.post_type.to_string())),
+        }
+        .unwrap_or_else(|| String::from("posts"));
+        let dir = format!("{}/{}", download_dir, prefix);
         let temp_dir = format!("{}.temp", dir);
 
         // don't download if directory exists
         if fs::metadata(dir.as_str()).is_ok() {
             return Ok(DownloadOk::Skipped(post.clone()));
         }
+        if post_dir_exists(download_dir, &prefix) {
+            return Ok(DownloadOk::Skipped(post.clone()));
+        }
 
         if post.locked || post.attached_videos.is_some() {
-            post = self
-                .download_post_info(&post, mtx)
-                .await
-                .map_err(|(s, _)| s)?;
+            post = self.download_post_info(&post, mtx).await?;
         }
 
         // recreate temp directory
@@ -328,15 +352,14 @@ impl<'a> Network {
                 body
             );
             let mut buffer = File::create(save_path.as_str())
-                .map_err(|e| format!("Error creating file {}: {}", save_path.as_str(), e))?;
+                .map_err(|e| DownloadErr::FileCreateErr(save_path.clone(), e))?;
             buffer
                 .write_all(&content.as_bytes())
-                .map_err(|e| format!("Error writing to file {}: {}", save_path.as_str(), e))?;
+                .map_err(|e| DownloadErr::FileWriteErr(save_path.clone(), e))?;
         }
 
         // rename temp directory
-        let _ = fs::rename(&temp_dir, &dir)
-            .map_err(|e| format!("Error renaming {}: {}", temp_dir, e))?;
+        let _ = fs::rename(&temp_dir, &dir).map_err(|e| DownloadErr::RenameErr(temp_dir, e))?;
 
         Ok(DownloadOk::Downloaded(post.clone()))
     }
@@ -345,7 +368,7 @@ impl<'a> Network {
         &self,
         post: &'a Post,
         mtx: Arc<Mutex<usize>>,
-    ) -> Result<Post, (String, &'a Post)> {
+    ) -> Result<Post, DownloadErr> {
         let url = API_POST_URL
             .replace("{artist_id}", post.community.id.to_string().as_str())
             .replace("{post_id}", post.id.to_string().as_str());
@@ -361,8 +384,8 @@ impl<'a> Network {
             let password = io::AsyncBufReadExt::lines(io::BufReader::new(io::stdin()))
                 .next_line()
                 .await
-                .map_err(|e| (format!("{}", e), post))?
-                .ok_or((format!("Could not read stdin"), post))?;
+                .map_err(|e| DownloadErr::StdinErrStr(e))?
+                .ok_or(DownloadErr::StdinErr)?;
 
             std::mem::drop(guard);
 
@@ -376,46 +399,48 @@ impl<'a> Network {
                 .json(&json)
                 .send()
                 .await
-                .map_err(|e| (format!("{}", e), post))?
+                .map_err(|e| DownloadErr::RequestErr(url.clone(), e))?
         } else {
             self.client
                 .get(&url)
                 .send()
                 .await
-                .map_err(|e| (format!("{}", e), post))?
+                .map_err(|e| DownloadErr::RequestErr(url.clone(), e))?
         };
 
         // parse response
         if !resp.status().is_success() {
-            return Err((format!("{}", resp.status()), post));
+            return Err(DownloadErr::ResponseErr(
+                url.clone(),
+                post.clone(),
+                resp.status(),
+            ));
         }
 
-        let text = &resp.text().await.map_err(|e| {
-            (
-                format!("Error reading response text for {}: {}", &url, e),
-                post,
-            )
-        })?;
-        let post_resp: Post = serde_json::from_str(text)
-            .map_err(|e| (format!("Error parsing json for {}: {}", &url, e), post))?;
+        let text = &resp
+            .text()
+            .await
+            .map_err(|e| DownloadErr::ResponseTextErr(url.clone(), e))?;
+        let post_resp: Post =
+            serde_json::from_str(text).map_err(|e| DownloadErr::ResponseJsonErr(url.clone(), e))?;
 
         Ok(post_resp)
     }
 
-    async fn download_direct(&self, url: &str, save_path: &str) -> Result<(), String> {
+    async fn download_direct(&self, url: &str, save_path: &str) -> Result<(), DownloadErr> {
         let data = self
             .anon_client
             .get(url)
             .send()
             .await
-            .map_err(|e| format!("Error sending request to {}: {}", url, e))?
+            .map_err(|e| DownloadErr::RequestErr(url.to_string(), e))?
             .bytes()
             .await
-            .map_err(|e| format!("Error parsing into bytes for {}: {}", url, e))?;
+            .map_err(|e| DownloadErr::ResponseBytesErr(url.to_string(), e))?;
         let mut buffer = File::create(save_path)
-            .map_err(|e| format!("Error creating file {}: {}", save_path, e))?;
+            .map_err(|e| DownloadErr::FileCreateErr(save_path.to_string(), e))?;
         buffer
             .write_all(&data)
-            .map_err(|e| format!("Error writing to file {}: {}", save_path, e))
+            .map_err(|e| DownloadErr::FileWriteErr(save_path.to_string(), e))
     }
 }
